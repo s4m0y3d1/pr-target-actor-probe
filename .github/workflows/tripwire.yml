@@ -1,0 +1,59 @@
+name: tripwire-poc
+# Runs Deriv's OWN credential tripwire against two checkout configurations:
+#   job A replicates deriv-com/shared-actions/.github/workflows/claude-pr-review.yml:65-71
+#          (the DEPRECATED workflow that derivatives-smarttrader + trading-bot-template call)
+#   job B replicates deriv-com/shared-actions/.github/workflows/ai-pr-review.yml:639-668
+#          (the HARDENED workflow) = control cell
+# Tripwire source: deriv-com/shared-actions/.github/actions/ai_review_engine_anthropic/action.yml:174-180
+# Nothing here touches Deriv infrastructure. Only their published config text is replicated.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+
+jobs:
+  a-deprecated-config:
+    name: A - claude-pr-review.yml checkout (no persist-credentials)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 20
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deriv tripwire
+        run: |
+          echo "::group::git config keys (names only, no values)"
+          git config --local --list --name-only | sort
+          echo "::endgroup::"
+          V=clean
+          git config --local --get-regexp '^remote\..*\.url$' | grep -q '@' && V=FIRED
+          grep -qiE 'x-access-token|extraheader|includeif|credential\.helper' .git/config && V=FIRED
+          echo "TRIPWIRE_VERDICT=$V"
+          echo "matched_patterns=$(grep -oiE 'x-access-token|extraheader|includeif|credential\.helper' .git/config | sort -u | tr '\n' ',')"
+          echo "runner_temp_files_matching_a_token_pattern=$(grep -rliE 'x-access-token|ghs_' "$RUNNER_TEMP" 2>/dev/null | wc -l)"
+
+  b-hardened-config:
+    name: B - ai-pr-review.yml checkout (persist-credentials false) CONTROL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 20
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+      - name: Deriv tripwire
+        run: |
+          echo "::group::git config keys (names only, no values)"
+          git config --local --list --name-only | sort
+          echo "::endgroup::"
+          V=clean
+          git config --local --get-regexp '^remote\..*\.url$' | grep -q '@' && V=FIRED
+          grep -qiE 'x-access-token|extraheader|includeif|credential\.helper' .git/config && V=FIRED
+          echo "TRIPWIRE_VERDICT=$V"
+          echo "matched_patterns=$(grep -oiE 'x-access-token|extraheader|includeif|credential\.helper' .git/config | sort -u | tr '\n' ',')"
+          echo "runner_temp_files_matching_a_token_pattern=$(grep -rliE 'x-access-token|ghs_' "$RUNNER_TEMP" 2>/dev/null | wc -l)"
